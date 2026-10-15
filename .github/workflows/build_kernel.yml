@@ -4,38 +4,52 @@ on:
   workflow_dispatch: # 允许手动点击按钮触发编译
   push:
     branches:
-      - main # 当推送到 main 分支时自动触发（可选）
+      - main 
 
 jobs:
   build:
-    runs-on: ubuntu-latest # 使用 Ubuntu 20.04 环境，兼容性最好，无法使用Ubuntu 20.04 环境
+    runs-on: ubuntu-22.04 # 明确指定 22.04，比 latest 更稳定，且支持我们需要的库
 
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # 升级到 v4
         with:
-          submodules: recursive # 必须递归拉取子模块（包含 KernelSU 等）
+          submodules: recursive 
 
       - name: Set up Build Environment
         run: |
           sudo apt-get update
+          # 更新依赖包，移除 ubuntu 22.04+ 已废弃的 lib32ncurses5-dev 等，改用兼容包
           sudo apt-get install -y git ccache automake flex lzop bison \
             gperf build-essential zip curl zlib1g-dev g++-multilib \
             python3 python3-pip libxml2-utils bzip2 libbz2-dev \
-            libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush \
-            schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev \
-            pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl \
-            libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev \
-            x11proto-core-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler kmod
+            squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make \
+            optipng maven libssl-dev pwgen libswitch-perl policycoreutils \
+            minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 \
+            libncurses-dev lib32z-dev libgl1-mesa-dev xsltproc unzip \
+            device-tree-compiler kmod wget
+          
+          # 安装 ARM64 和 ARM32 交叉编译器 (SM8350 编译必须)
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: kernel-sm8350-cache # 缓存的唯一标识
+          max-size: 2G # 最大缓存 2GB，足够内核使用
 
       - name: Download Clang Toolchain
         run: |
-          # 下载适合 SM8350 的 Clang 工具链 (这里使用 Google 官方预编译的 r416183b1，兼容性较好)
           cd $GITHUB_WORKSPACE
           mkdir clang
-          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b1.tar.gz
-          tar -C clang -xzf clang-r416183b1.tar.gz
-          export CLANG_DIR=$GITHUB_WORKSPACE/clang/bin
+          echo "正在下载 Clang r416183b1 (这可能需要几分钟)..."
+          # 使用更稳定的下载源，如果 googlesource 失败，这里保留了原逻辑但增加了超时重试
+          wget --tries=3 --timeout=60 -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b1.tar.gz -O clang.tar.gz || \
+          wget --tries=3 --timeout=60 -q https://mirrors.tuna.tsinghua.edu.cn/aosp-monthly/prebuilts/clang/host/linux-x86/clang-r416183b1.tar.gz -O clang.tar.gz
+          
+          tar -C clang -xzf clang.tar.gz
+          rm clang.tar.gz
+          echo "CLANG_DIR=$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_ENV
 
       - name: Compile Kernel
         run: |
@@ -45,14 +59,20 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
+          
+          # 启用 ccache 加速编译
+          export PATH="/usr/lib/ccache:$PATH"
 
-          # 开始编译
+          echo "开始生成 defconfig..."
           make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- star_defconfig
-          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- -j$(nproc --all)
+          
+          echo "开始编译内核 (使用 $(nproc) 核心)..."
+          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- -j$(nproc)
 
       - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4 # 升级到 v4，解决报错
         if: success()
         with:
           name: Xiaomi-11-Ultra-Kernel
           path: out/arch/arm64/boot/Image
+          retention-days: 7 # 产物保留 7 天，节省空间
