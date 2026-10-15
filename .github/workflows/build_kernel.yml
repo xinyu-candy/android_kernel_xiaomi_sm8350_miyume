@@ -41,33 +41,26 @@ jobs:
       - name: Download Clang Toolchain
         run: |
           cd $GITHUB_WORKSPACE
-          mkdir clang
-          echo "正在下载 Clang r416183b (这可能需要 1-2 分钟)..."
+          echo "正在下载 Android NDK r23c (内含 Clang r416183c)..."
           
-          # 使用 curl -L 跟随重定向，这是下载 googlesource 文件的关键
-          # 如果主链接失败，自动切换到备用链接
-          curl -fSL --retry 5 --retry-connrefused --connect-timeout 30 \
-            -o clang.tar.gz \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz" || \
-          curl -fSL --retry 5 --retry-connrefused --connect-timeout 30 \
-            -o clang.tar.gz \
-            "https://gitlab.com/mvaisakh/prebuilts/-/raw/main/clang/host/linux-x86/clang-r416183b.tar.gz"
-            
-          if [ $? -ne 0 ] || [ ! -s clang.tar.gz ]; then
-             echo "❌ Clang 下载失败！请检查网络连接。"
-             exit 1
-          fi
+          wget -q --show-progress --tries=3 --timeout=120 \
+            "https://dl.google.com/android/repository/android-ndk-r23c-linux.zip" \
+            -O ndk.zip
           
-          echo "正在解压..."
-          tar -C clang -xzf clang.tar.gz
-          rm clang.tar.gz
+          echo "正在解压 NDK..."
+          unzip -q ndk.zip
           
-          # 验证 clang 是否存在
+          mkdir -p clang
+          cp -r android-ndk-r23c/toolchains/llvm/prebuilt/linux-x86_64/* clang/
+          
+          rm -rf ndk.zip android-ndk-r23c
+          
           if [ -f "$GITHUB_WORKSPACE/clang/bin/clang" ]; then
              echo "✅ Clang 安装成功！"
+             $GITHUB_WORKSPACE/clang/bin/clang --version
              echo "CLANG_DIR=$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_ENV
           else
-             echo "❌ Clang 二进制文件未找到！"
+             echo "❌ Clang 未找到！"
              exit 1
           fi
       - name: Compile Kernel
