@@ -42,15 +42,34 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           mkdir clang
-          echo "正在下载 Clang r416183b1 (这可能需要几分钟)..."
-          # 使用更稳定的下载源，如果 googlesource 失败，这里保留了原逻辑但增加了超时重试
-          wget --tries=3 --timeout=60 -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b1.tar.gz -O clang.tar.gz || \
-          wget --tries=3 --timeout=60 -q https://mirrors.tuna.tsinghua.edu.cn/aosp-monthly/prebuilts/clang/host/linux-x86/clang-r416183b1.tar.gz -O clang.tar.gz
+          echo "正在下载 Clang r416183b (这可能需要 1-2 分钟)..."
           
+          # 使用 curl -L 跟随重定向，这是下载 googlesource 文件的关键
+          # 如果主链接失败，自动切换到备用链接
+          curl -fSL --retry 5 --retry-connrefused --connect-timeout 30 \
+            -o clang.tar.gz \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz" || \
+          curl -fSL --retry 5 --retry-connrefused --connect-timeout 30 \
+            -o clang.tar.gz \
+            "https://gitlab.com/mvaisakh/prebuilts/-/raw/main/clang/host/linux-x86/clang-r416183b.tar.gz"
+            
+          if [ $? -ne 0 ] || [ ! -s clang.tar.gz ]; then
+             echo "❌ Clang 下载失败！请检查网络连接。"
+             exit 1
+          fi
+          
+          echo "正在解压..."
           tar -C clang -xzf clang.tar.gz
           rm clang.tar.gz
-          echo "CLANG_DIR=$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_ENV
-
+          
+          # 验证 clang 是否存在
+          if [ -f "$GITHUB_WORKSPACE/clang/bin/clang" ]; then
+             echo "✅ Clang 安装成功！"
+             echo "CLANG_DIR=$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_ENV
+          else
+             echo "❌ Clang 二进制文件未找到！"
+             exit 1
+          fi
       - name: Compile Kernel
         run: |
           export PATH=$CLANG_DIR:$PATH
